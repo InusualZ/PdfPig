@@ -2,9 +2,9 @@
 {
     using System;
     using System.Collections.Generic;
-    using PdfPig;
     using Tokenization.Scanner;
     using Tokens;
+    using Core;
     using Writer;
 
     /// <inheritdoc/>
@@ -81,12 +81,17 @@
                             return newReferenceToken;
                         }
 
+                        var reservedNumber = ReserveTokenNumber();
+                        var reservedToken = new IndirectReferenceToken(new IndirectReference(reservedNumber, 0));
+
+                        SetNewReference(referenceToken, reservedToken);
+
                         var referencedToken = tokenScanner(referenceToken);
                         var newReferencedToken = CopyObject(referencedToken, tokenScanner);
 
-                        var newToken = WriteToken(newReferencedToken);
-                        SetNewReference(referenceToken, newToken);
-                        return newToken;
+                        WriteToken(newReferencedToken, reservedNumber);
+ 
+                        return reservedToken;
                     }
 
                 case StreamToken streamToken:

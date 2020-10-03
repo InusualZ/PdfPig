@@ -4,7 +4,10 @@
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
+    using System.Linq;
     using Content;
+    using Copier;
+    using Copier.Page;
     using Core;
     using CrossReference;
     using Encryption;
@@ -16,7 +19,6 @@
     using Tokenization.Scanner;
     using Tokens;
     using Exceptions;
-    using System.Linq;
     using Util;
 
     /// <summary>
@@ -165,13 +167,20 @@
             private readonly PdfStreamWriter context = new PdfStreamWriter();
             private readonly List<IndirectReferenceToken> pagesTokenReferences = new List<IndirectReferenceToken>();
             private readonly IndirectReferenceToken rootPagesReference;
+            private readonly MultiCopier copier;
 
             private decimal currentVersion = DefaultVersion;
             private int pageCount = 0;
 
             public DocumentMerger()
             {
+                context = new PdfStreamWriter();
+                pagesTokenReferences = new List<IndirectReferenceToken>();
+
                 rootPagesReference = context.ReserveNumberToken();
+
+                copier = new MultiCopier(context);
+                copier.AddCopier(new PagesCopier(copier, rootPagesReference));
             }
 
             public void AppendDocument(Catalog catalog, decimal version, IPdfTokenScanner tokenScanner, IReadOnlyList<int> pages)
@@ -197,8 +206,6 @@
                 }
 
                 currentVersion = Math.Max(version, currentVersion);
-
-                var referencesFromDocument = new Dictionary<IndirectReferenceToken, IndirectReferenceToken>();
 
                 var currentNodeReference = context.ReserveNumberToken();
                 var pagesReferences = new List<IndirectReferenceToken>();
@@ -243,7 +250,7 @@
                         {
                             foreach (var pair in resourcesDictionary.Data)
                             {
-                                resources.Add(pair.Key, CopyToken(pair.Value, tokenScanner, referencesFromDocument));
+                                resources.Add(pair.Key, copier.CopyObject(pair.Value, tokenScanner));
                             }
                         }
 
@@ -297,7 +304,7 @@
                     }
 
                     CopyEntries(pageNode.Parent);
-                    pagesReferences.Add(CopyPageNode(pageNode, currentNodeReference, tokenScanner, referencesFromDocument));
+                    pagesReferences.Add(CopyPageNode(pageNode, currentNodeReference, tokenScanner));
                 }
 
                 if (pagesReferences.Count < 1)
@@ -306,6 +313,8 @@
                 }
 
                 CreateTree();
+
+                copier.ClearReference();
             }
 
             public byte[] Build()
@@ -341,13 +350,7 @@
                 return bytes;
             }
 
-            public void Close()
-            {
-                context.Dispose();
-            }
-
-            private IndirectReferenceToken CopyPageNode(PageTreeNode pageNode, IndirectReferenceToken parentPagesObject, IPdfTokenScanner tokenScanner, 
-                IDictionary<IndirectReferenceToken, IndirectReferenceToken> referencesFromDocument)
+            private IndirectReferenceToken CopyPageNode(PageTreeNode pageNode, IndirectReferenceToken parentPagesObject, IPdfTokenScanner tokenScanner)
             {
                 Debug.Assert(pageNode.IsPage);
 
@@ -367,84 +370,17 @@
                         continue;
                     }
 
-                    pageDictionary.Add(NameToken.Create(name), CopyToken(token, tokenScanner, referencesFromDocument));
+                    pageDictionary.Add(NameToken.Create(name), copier.CopyObject(token, tokenScanner));
                 }
 
                 return context.WriteToken(new DictionaryToken(pageDictionary));
             }
 
-            /// <summary>
-            /// The purpose of this method is to resolve indirect reference. That mean copy the reference's content to the new document's stream
-            /// and replace the indirect reference with the correct/new one
-            /// </summary>
-            /// <param name="tokenToCopy">Token to inspect for reference</param>
-            /// <param name="tokenScanner">scanner get the content from the original document</param>
-            /// <param name="referencesFromDocument">Map of previously copied</param>
-            /// <returns>A reference of the token that was copied. With all the reference updated</returns>
-            private IToken CopyToken(IToken tokenToCopy, IPdfTokenScanner tokenScanner, IDictionary<IndirectReferenceToken, IndirectReferenceToken> referencesFromDocument)
+            private void Close()
             {
-                // This token need to be deep copied, because they could contain reference. So we have to update them.
-                switch (tokenToCopy)
-                {
-                    case DictionaryToken dictionaryToken:
-                        {
-                            var newContent = new Dictionary<NameToken, IToken>();
-                            foreach (var setPair in dictionaryToken.Data)
-                            {
-                                var name = setPair.Key;
-                                var token = setPair.Value;
-                                newContent.Add(NameToken.Create(name), CopyToken(token, tokenScanner, referencesFromDocument));
-                            }
-
-                            return new DictionaryToken(newContent);
-                        }
-                    case ArrayToken arrayToken:
-                        {
-                            var newArray = new List<IToken>(arrayToken.Length);
-                            foreach (var token in arrayToken.Data)
-                            {
-                                newArray.Add(CopyToken(token, tokenScanner, referencesFromDocument));
-                            }
-
-                            return new ArrayToken(newArray);
-                        }
-                    case IndirectReferenceToken referenceToken:
-                        {
-                            if (referencesFromDocument.TryGetValue(referenceToken, out var newReferenceToken))
-                            {
-                                return newReferenceToken;
-                            }
-
-                            //we add the token to referencesFromDocument to prevent stackoverflow on references cycles 
-                            newReferenceToken = context.ReserveNumberToken();
-                            referencesFromDocument.Add(referenceToken, newReferenceToken);
-
-                            var tokenObject = DirectObjectFinder.Get<IToken>(referenceToken.Data, tokenScanner);
-                            Debug.Assert(!(tokenObject is IndirectReferenceToken));
-
-                            var newToken = CopyToken(tokenObject, tokenScanner, referencesFromDocument);
-                            context.WriteToken(newReferenceToken, newToken);
-                            return newReferenceToken;
-                        }
-                    case StreamToken streamToken:
-                        {
-                            var properties = CopyToken(streamToken.StreamDictionary, tokenScanner, referencesFromDocument) as DictionaryToken;
-                            Debug.Assert(properties != null);
-
-                            var bytes = streamToken.Data;
-                            return new StreamToken(properties, bytes);
-                        }
-
-                    case ObjectToken _:
-                        {
-                            // Since we don't write token directly to the stream.
-                            // We can't know the offset. Therefore the token would be invalid
-                            throw new NotSupportedException("Copying a Object token is not supported");
-                        }
-                }
-
-                return tokenToCopy;
+                context.Dispose();
             }
+
         }
     }
 }
