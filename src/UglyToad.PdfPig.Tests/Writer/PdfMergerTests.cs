@@ -4,6 +4,7 @@
     using PdfPig.Writer;
     using System;
     using System.IO;
+    using UglyToad.PdfPig.Core;
     using Xunit;
 
     public class PdfMergerTests
@@ -96,6 +97,24 @@
         }
 
         [Fact]
+        public void DeduplicatedFonts()
+        {
+            var one = IntegrationHelpers.GetDocumentPath("FontMergin-TTF-FirstHalf.pdf");
+            var two = IntegrationHelpers.GetDocumentPath("FontMergin-TTF-SecondHalf.pdf");
+
+            var result = PdfMerger.Merge(one, two);
+
+            WriteFile(nameof(DeduplicatedFonts), result);
+
+            using (var document = PdfDocument.Open(result, ParsingOptions.LenientParsingOff))
+            {
+                Assert.Equal(2, document.NumberOfPages);
+                Assert.True(document.Structure.CrossReferenceTable.ObjectOffsets.Count <= 16807,
+                    "Expected object count to be lower than 5073");
+            }
+        }
+
+        [Fact]
         public void CanMergeWithObjectStream()
         {
             var first = IntegrationHelpers.GetDocumentPath("Single Page Simple - from google drive.pdf");
@@ -155,6 +174,23 @@
             }
         }
 
+        [Fact]
+        public void NoStackoverflow()
+        {
+            try
+            {
+                var bytes = PdfMerger.Merge(IntegrationHelpers.GetDocumentPath("68-1990-01_A.pdf"));
+                using (var document = PdfDocument.Open(bytes, ParsingOptions.LenientParsingOff))
+                {
+                    Assert.Equal(45, document.NumberOfPages);
+                }
+            }
+            catch (StackOverflowException)
+            {
+                Assert.True(false);
+            }
+        }
+
         private static void WriteFile(string name, byte[] bytes)
         {
             try
@@ -171,23 +207,6 @@
             catch
             {
                 // ignored.
-            }
-        }
-
-        [Fact]
-        public void NoStackoverflow()
-        {
-            try
-            {
-                var bytes = PdfMerger.Merge(IntegrationHelpers.GetDocumentPath("68-1990-01_A.pdf"));
-                using (var document = PdfDocument.Open(bytes, ParsingOptions.LenientParsingOff))
-                {
-                    Assert.Equal(45, document.NumberOfPages);
-                }
-            }
-            catch (StackOverflowException)
-            {
-                Assert.True(false);
             }
         }
     }

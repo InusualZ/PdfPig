@@ -20,6 +20,7 @@
     using Tokens;
     using Exceptions;
     using Util;
+    using UglyToad.PdfPig.Writer.Copier.Font;
 
     /// <summary>
     /// Merges PDF documents into each other.
@@ -180,7 +181,7 @@
                 rootPagesReference = context.ReserveNumberToken();
 
                 copier = new MultiCopier(context);
-                copier.AddCopier(new PagesCopier(copier, rootPagesReference));
+                copier.AddCopier(new FontCopier(copier));
             }
 
             public void AppendDocument(Catalog catalog, decimal version, IPdfTokenScanner tokenScanner, IReadOnlyList<int> pages)
